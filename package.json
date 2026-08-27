@@ -1,0 +1,19 @@
+{
+  "name": "stock-launchpad",
+  "version": "1.0.0",
+  "description": "Token launchpad for Robinhood Chain",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy": "node scripts/deploy.js"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.2",
+    "ethers": "^6.13.5",
+    "inquirer": "^9.3.7"
+  },
+  "devDependencies": {
+    "hardhat": "^2.22.19",
+    "@nomicfoundation/hardhat-ethers": "^3.0.8"
+  }
+}
