@@ -1,6 +1,5 @@
 const hre = require("hardhat");
 const { ethers } = hre;
-const inquirer = require("inquirer");
 
 const DEFAULT_RPC =
   "https://rpc.mainnet.chain.robinhood.com";
@@ -14,6 +13,9 @@ const DEFAULT_USDG =
   "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
 
 async function main() {
+  // FIX: inquirer v9 adalah ESM
+  const inquirer = (await import("inquirer")).default;
+
   console.clear();
 
   console.log(`
@@ -28,7 +30,12 @@ async function main() {
       type: "input",
       name: "rpcUrl",
       message: "RPC URL:",
-      default: DEFAULT_RPC
+      default: DEFAULT_RPC,
+      validate(value) {
+        return value.trim()
+          ? true
+          : "RPC URL wajib diisi";
+      }
     },
     {
       type: "password",
@@ -41,7 +48,7 @@ async function main() {
         }
 
         try {
-          new ethers.Wallet(value);
+          new ethers.Wallet(value.trim());
           return true;
         } catch {
           return "Private key tidak valid";
@@ -53,7 +60,7 @@ async function main() {
       name: "treasury",
       message: "Platform treasury address:",
       validate(value) {
-        return ethers.isAddress(value)
+        return ethers.isAddress(value.trim())
           ? true
           : "Wallet address tidak valid";
       }
@@ -78,26 +85,30 @@ async function main() {
     }
   ]);
 
-  const provider =
-    new ethers.JsonRpcProvider(
-      answers.rpcUrl,
-      CHAIN_ID
-    );
+  console.log("\nChecking network...");
 
-  const network =
-    await provider.getNetwork();
+  const provider = new ethers.JsonRpcProvider(
+    answers.rpcUrl.trim()
+  );
+
+  const network = await provider.getNetwork();
 
   if (Number(network.chainId) !== CHAIN_ID) {
     throw new Error(
-      `RPC bukan Robinhood Chain mainnet. Chain ID: ${network.chainId}`
+      `RPC salah. Dapat Chain ID ${network.chainId}, seharusnya ${CHAIN_ID}`
     );
   }
 
-  const wallet =
-    new ethers.Wallet(
-      answers.privateKey,
-      provider
-    );
+  const privateKey = answers.privateKey.trim();
+
+  const wallet = new ethers.Wallet(
+    privateKey,
+    provider
+  );
+
+  const treasury = ethers.getAddress(
+    answers.treasury.trim()
+  );
 
   console.log("\n══════════════════════════════");
   console.log("NETWORK CHECK");
@@ -105,39 +116,41 @@ async function main() {
   console.log("Chain ID:", network.chainId);
   console.log("Deployer:", wallet.address);
 
-  const balance =
-    await provider.getBalance(
-      wallet.address
-    );
+  const balance = await provider.getBalance(
+    wallet.address
+  );
 
   console.log(
-    "ETH Balance:",
+    "Gas balance:",
     ethers.formatEther(balance)
   );
 
   if (balance === 0n) {
     throw new Error(
-      "Wallet tidak punya ETH untuk gas"
+      "Wallet tidak punya saldo untuk gas"
     );
   }
 
   console.log("\nDeploying Launchpad...");
 
-  const Launchpad =
-    await ethers.getContractFactory(
-      "Launchpad",
-      wallet
-    );
+  const Launchpad = await ethers.getContractFactory(
+    "Launchpad"
+  );
 
-  const launchpad =
-    await Launchpad.deploy(
-      answers.treasury
-    );
+  // Connect factory ke wallet + RPC Robinhood
+  const launchpad = await Launchpad
+    .connect(wallet)
+    .deploy(treasury);
 
   console.log(
-    "Transaction:",
+    "\nDeploy transaction:"
+  );
+
+  console.log(
     launchpad.deploymentTransaction().hash
   );
+
+  console.log("\nWaiting for confirmation...");
 
   await launchpad.waitForDeployment();
 
@@ -145,7 +158,11 @@ async function main() {
     await launchpad.getAddress();
 
   console.log(
-    "\nLaunchpad deployed:",
+    "\n✓ Launchpad deployed!"
+  );
+
+  console.log(
+    "Address:",
     launchpadAddress
   );
 
@@ -163,11 +180,10 @@ async function main() {
     answers.stockTokens &&
     answers.stockTokens.trim() !== ""
   ) {
-    const stocks =
-      answers.stockTokens
-        .split(",")
-        .map((address) => address.trim())
-        .filter(Boolean);
+    const stocks = answers.stockTokens
+      .split(",")
+      .map(address => address.trim())
+      .filter(address => address.length > 0);
 
     for (const address of stocks) {
       if (!ethers.isAddress(address)) {
@@ -182,20 +198,32 @@ async function main() {
     }
   }
 
-  console.log("\nWhitelisting pair assets...");
+  if (pairAssets.length > 0) {
+    console.log(
+      "\nWhitelisting pair assets..."
+    );
 
-  for (const asset of pairAssets) {
-    console.log("Adding:", asset);
-
-    const tx =
-      await launchpad.setPairAsset(
-        asset,
-        true
+    for (const asset of pairAssets) {
+      console.log(
+        "\nAdding pair:",
+        asset
       );
 
-    await tx.wait();
+      const tx =
+        await launchpad.setPairAsset(
+          asset,
+          true
+        );
 
-    console.log("✓ Added");
+      console.log(
+        "Transaction:",
+        tx.hash
+      );
+
+      await tx.wait();
+
+      console.log("✓ Added");
+    }
   }
 
   console.log(`
@@ -207,13 +235,13 @@ Launchpad:
 ${launchpadAddress}
 
 Treasury:
-${answers.treasury}
+${treasury}
 
 Network:
 Robinhood Chain Mainnet
 
 Chain ID:
-4663
+${CHAIN_ID}
 
 Market Fee:
 1.50%
@@ -229,12 +257,16 @@ ${pairAssets.length}
 `);
 
   console.log(
-    `Explorer:\nhttps://robinhoodchain.blockscout.com/address/${launchpadAddress}`
+    "══════════════════════════════"
   );
 }
 
-main().catch((error) => {
-  console.error("\nDEPLOY FAILED\n");
+main().catch(error => {
+  console.error("\n╔══════════════════════════════╗");
+  console.error("║         DEPLOY FAILED        ║");
+  console.error("╚══════════════════════════════╝\n");
+
   console.error(error);
+
   process.exit(1);
 });
